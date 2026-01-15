@@ -28,9 +28,6 @@ struct PickerView: View {
         }
         .frame(width: 400)
         .background(Color(NSColor.windowBackgroundColor))
-        .onAppear {
-            setupKeyboardMonitoring()
-        }
         .focusable(false)
         .sheet(isPresented: $showingAddRule, onDismiss: {
             browserManager.sourceAppBundleID = nil
@@ -210,6 +207,7 @@ struct PickerView: View {
             }
             .buttonStyle(.plain)
             .focusable(false)
+            .keyboardShortcut(.cancelAction) // ESC 키로 닫기
             .onHover { isHovered in
                 isCancelHovered = isHovered
             }
@@ -224,16 +222,6 @@ struct PickerView: View {
         .padding(.bottom, 16)
     }
 
-
-    private func setupKeyboardMonitoring() {
-        NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
-            if event.keyCode == 53 { // ESC key
-                self.browserManager.close()
-                return nil
-            }
-            return event
-        }
-    }
 }
 
 struct PickerView_Previews: PreviewProvider {
