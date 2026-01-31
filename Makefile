@@ -1,14 +1,16 @@
-.PHONY: help build test
+.PHONY: help build test dmg clean
 
 DEFAULT_DEVELOPER_DIR := /Applications/Xcode.app/Contents/Developer
 
 help:
 	@echo "사용 가능한 명령어:"
-	@echo "  make build  - 앱 번들 생성 및 설치"
-	@echo "  make test   - swift test"
+	@echo "  make build      - 앱 번들 생성 및 설치"
+	@echo "  make test       - swift test"
+	@echo "  make dmg        - DMG 파일 생성"
+	@echo "  make clean      - 빌드 파일 정리"
 
 build:
-	./build.sh
+	./scripts/build.sh
 
 test:
 	@if [ -z "$$DEVELOPER_DIR" ]; then \
@@ -18,3 +20,9 @@ test:
 		echo "기존 DEVELOPER_DIR 사용: $$DEVELOPER_DIR"; \
 		swift test; \
 	fi
+
+dmg:
+	./scripts/create-dmg.sh
+
+clean:
+	rm -rf .build dist

@@ -51,4 +51,7 @@ Icon
 *.swo
 
 # App bundle
-BrowserPicker.app/
+BrowserOpener.app/
+
+# Distribution
+dist/
