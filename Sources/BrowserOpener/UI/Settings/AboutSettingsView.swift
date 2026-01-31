@@ -1,8 +1,7 @@
 import SwiftUI
 
 struct AboutSettingsView: View {
-    private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "1.0.0"
-    private let buildNumber = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
+    private let appVersion = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.0.0"
 
     var body: some View {
         ScrollView {
@@ -38,7 +37,7 @@ struct AboutSettingsView: View {
                                 .font(.title2)
                                 .fontWeight(.semibold)
 
-                            Text("버전 \(appVersion) (빌드 \(buildNumber))")
+                            Text("버전 \(appVersion)")
                                 .font(.system(size: 13))
                                 .foregroundColor(.secondary)
                         }
