@@ -1,0 +1,114 @@
+name: macOS artifacts
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main, 'ci/**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.event_name }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+env:
+  DEVELOPER_DIR: /Applications/Xcode_26.0.1.app/Contents/Developer
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  build:
+    # Internal ci/** branches already run on push; other PRs (including forks) run here.
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || !startsWith(github.head_ref, 'ci/')
+    runs-on: macos-15
+    timeout-minutes: 30
+    outputs:
+      artifact-name: ${{ steps.name.outputs.artifact-name }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Check Apple Silicon and pinned Xcode
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 26.0.1'
+          xcodebuild -version
+          swift --version
+          sw_vers
+      - name: Test
+        run: |
+          mkdir -p ci-logs
+          make test 2>&1 | tee ci-logs/tests.log
+          git diff --exit-code -- Package.resolved
+      - name: Release build and DMG
+        run: |
+          make dmg 2>&1 | tee ci-logs/package.log
+          git diff --exit-code -- Package.resolved
+      - name: Verify app and DMG
+        run: |
+          bash scripts/verify-dmg.sh dist/BrowserOpener-*.dmg 2>&1 | tee ci-logs/verification.log
+      - name: Record provenance and checksums
+        id: name
+        env:
+          EVENT_HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          python3 scripts/build-metadata.py
+          cp Package.resolved dist/
+          cp ci-logs/*.log dist/
+          (cd dist && shasum -a 256 BrowserOpener-*.dmg > SHA256SUMS)
+          echo "artifact-name=BrowserOpener-arm64-${GITHUB_SHA}-${GITHUB_RUN_ATTEMPT}" >> "$GITHUB_OUTPUT"
+          cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+      - name: Upload DMG and build evidence (14 days)
+        id: upload
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: ${{ steps.name.outputs.artifact-name }}
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+      - name: Link artifact
+        env:
+          ARTIFACT_URL: ${{ steps.upload.outputs.artifact-url }}
+        run: echo "[Download DMG and evidence (14 days)]($ARTIFACT_URL)" >> "$GITHUB_STEP_SUMMARY"
+      - name: Preserve failure logs (14 days)
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: failure-logs-${{ github.sha }}-${{ github.run_attempt }}
+          path: ci-logs/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  verify-download:
+    needs: build
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Download uploaded artifact on a fresh runner
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: downloaded
+      - name: Check checksum, provenance and packaged app
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 26.0.1'
+          (cd downloaded && shasum -a 256 -c SHA256SUMS)
+          python3 - <<'PY'
+          import json, os
+          with open('downloaded/build-info.json') as stream:
+              info = json.load(stream)
+          assert info['source_commit'] == os.environ['GITHUB_SHA'], info
+          PY
+          cmp Package.resolved downloaded/Package.resolved
+          bash scripts/verify-dmg.sh downloaded/BrowserOpener-*.dmg
+          echo 'Uploaded DMG downloaded again: SHA-256, provenance, bundle, arm64, macOS 13.0 and ad-hoc signature verified.' >> "$GITHUB_STEP_SUMMARY"
