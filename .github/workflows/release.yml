@@ -1,0 +1,122 @@
+name: Draft Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: App version and new tag (no v prefix)
+        required: true
+        default: '1.0.2'
+        type: string
+      target_commit:
+        description: Full 40-character current main SHA to build and release
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+# Serialize this version without interrupting asset uploads. Existing versions fail closed.
+concurrency:
+  group: draft-release-${{ inputs.version }}
+  cancel-in-progress: false
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Check main, exact commit, version and visible conflicts
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+        run: python3 scripts/draft-release.py preflight
+
+  build:
+    needs: preflight
+    permissions:
+      contents: read
+    uses: ./.github/workflows/macos.yml
+
+  draft:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    outputs:
+      release-id: ${{ steps.create.outputs.release-id }}
+      download-artifact-id: ${{ steps.transfer.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          name: ${{ needs.build.outputs.artifact-name }}
+          path: downloaded
+      - name: Create an unpublished draft and upload without overwriting
+        id: create
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+        run: python3 scripts/draft-release.py create --directory downloaded
+      # Draft visibility requires push access. Keep this API access in the one write job.
+      - name: Download actual Draft Release assets and record their origin
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+          RELEASE_ID: ${{ steps.create.outputs.release-id }}
+        run: python3 scripts/draft-release.py download --directory release-download
+      - name: Transfer only files downloaded from the Release (14 days)
+        id: transfer
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        with:
+          name: release-download-${{ steps.create.outputs.release-id }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: release-download/
+          if-no-files-found: error
+          retention-days: 14
+          compression-level: 0
+
+  verify-release:
+    needs: draft
+    runs-on: macos-15
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    env:
+      DEVELOPER_DIR: /Applications/Xcode_26.0.1.app/Contents/Developer
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          persist-credentials: false
+      - name: Receive the files fetched from the Release by the write job
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
+        with:
+          artifact-ids: ${{ needs.draft.outputs.download-artifact-id }}
+          merge-multiple: true
+          path: release-download
+      - name: Verify Release receipt and file provenance offline
+        env:
+          RELEASE_VERSION: ${{ inputs.version }}
+          TARGET_COMMIT: ${{ inputs.target_commit }}
+          RELEASE_ID: ${{ needs.draft.outputs.release-id }}
+        run: python3 scripts/draft-release.py verify-download --directory release-download
+      - name: Verify the downloaded DMG and packaged app on macOS
+        run: |
+          test "$(uname -m)" = arm64
+          test "$(xcodebuild -version | head -n 1)" = 'Xcode 26.0.1'
+          (cd release-download && shasum -a 256 -c SHA256SUMS)
+          bash scripts/verify-dmg.sh release-download/BrowserOpener-*.dmg
+          cat release-download/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+          echo 'Release-origin files verified. The write job confirmed draft=true when downloading; this job does not query the Draft API. This new build still needs user Mac validation.' >> "$GITHUB_STEP_SUMMARY"
