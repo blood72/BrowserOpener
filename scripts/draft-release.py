@@ -73,8 +73,9 @@ def context():
     return version, commit, info, run_url
 
 
-def ensure_unused(api, version):
-    # The list endpoint includes authenticated drafts; /releases/tags alone is insufficient.
+def ensure_no_visible_conflict(api, version):
+    # GitHub lists drafts only with push access. Read-only preflight is advisory;
+    # create() must repeat this check using the write job's token before mutation.
     page = 1
     while True:
         releases = api.request(f'releases?per_page=100&page={page}')
@@ -127,7 +128,7 @@ def release_body(version, commit, run_url):
 - **ad-hoc 서명**이며 Developer ID 서명·Apple 공증은 없습니다.
 - 이 새 {version} 산출물은 사용자 Mac에서 아직 검증하지 않았습니다. 이전 1.0.1 CI 빌드의 사용자 실행 확인을 대신 사용하지 않습니다.
 - DMG와 `SHA256SUMS`, 정확한 소스·툴체인 정보를 담은 `build-info.json`을 첨부합니다.
-- workflow의 마지막 `verify-release` 작업이 실제 첨부 파일을 다시 내려받아 검사합니다. 이 작업까지 성공했는지 확인한 뒤 검토하세요.
+- 쓰기 권한의 `draft` 작업이 실제 Release 첨부 파일을 다시 내려받고 출처 기록과 함께 별도 artifact로 전달합니다. 마지막 읽기 전용 `verify-release` 작업이 그 파일을 macOS에서 검사합니다. 이 작업까지 성공했는지 확인한 뒤 검토하세요.
 
 초안은 공개 게시되지 않았으며 다운로드 URL은 아직 공개 tap용 URL이 아닙니다.
 향후 사용자가 정식 게시한 뒤 버전별 고정 Release asset URL과 SHA-256으로 별도 homebrew-taps PR을 준비합니다. Actions artifact URL은 cask에 사용하지 않습니다.
@@ -137,7 +138,7 @@ def release_body(version, commit, run_url):
 
 def create(api, directory, version, commit, info, run_url):
     validate_artifacts(directory, version, commit, info, run_url)
-    ensure_unused(api, version)  # Recheck after the potentially lengthy read-only build.
+    ensure_no_visible_conflict(api, version)  # Write token sees drafts; recheck before any mutation.
     release = api.request('releases', data={'tag_name': version, 'target_commitish': commit,
                          'name': f'BrowserOpener {version}', 'draft': True, 'prerelease': False,
                          'body': release_body(version, commit, run_url)})
@@ -167,19 +168,53 @@ def download(api, release_id, directory, version, commit, info, run_url):
         (directory / asset['name']).write_bytes(data)
     validate_artifacts(directory, version, commit, info, run_url)
     check_draft(api.request(f'releases/{release_id}'), version, commit)
+    receipt = {key: release[key] for key in ('id', 'tag_name', 'target_commitish',
+                                            'draft', 'prerelease', 'html_url')}
+    receipt['run_url'] = run_url
+    receipt['assets'] = [{'id': asset['id'], 'name': asset['name'],
+                         'sha256': hashlib.sha256((directory / asset['name']).read_bytes()).hexdigest()}
+                        for asset in release['assets']]
+    # Written only after actual API downloads, hash/provenance checks and a final draft check.
+    (directory / 'release-receipt.json').write_text(json.dumps(receipt, indent=2) + '\n')
     return release
+
+
+def verify_download(directory, release_id, version, commit, info, run_url):
+    """Validate the write job's transfer offline; this needs no Draft API token."""
+    require(sorted(p.name for p in directory.iterdir()) == sorted((*asset_names(version), 'release-receipt.json')),
+            'Missing or unexpected files in the Release download artifact')
+    receipt = json.loads((directory / 'release-receipt.json').read_text())
+    check_draft(receipt, version, commit)
+    require(receipt['id'] == release_id, 'Release receipt ID mismatch')
+    require(receipt['run_url'] == run_url, 'Release receipt run mismatch')
+    require(sorted(a['name'] for a in receipt['assets']) == sorted(asset_names(version)),
+            'Unexpected assets in Release receipt')
+    ids = [a['id'] for a in receipt['assets']]
+    require(all(type(i) is int and i > 0 for i in ids) and len(set(ids)) == len(ids),
+            'Invalid Release asset IDs')
+    for asset in receipt['assets']:
+        digest = hashlib.sha256((directory / asset['name']).read_bytes()).hexdigest()
+        require(digest == asset['sha256'], f"Release receipt hash mismatch: {asset['name']}")
+    validate_artifacts(directory, version, commit, info, run_url)
+    return receipt
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('command', choices=['preflight', 'create', 'download'])
+    parser.add_argument('command', choices=['preflight', 'create', 'download', 'verify-download'])
     parser.add_argument('--directory', type=Path)
     args = parser.parse_args()
     version, commit, info, run_url = context()
+    if args.command == 'verify-download':
+        require(args.directory is not None, '--directory is required')
+        receipt = verify_download(args.directory, int(os.environ['RELEASE_ID']), version, commit, info, run_url)
+        print(f"Verified transferred bytes from Release {receipt['id']} without Draft API access.")
+        return
     api = GitHub(os.environ['GITHUB_REPOSITORY'], os.environ['GH_TOKEN'])
     if args.command == 'preflight':
-        ensure_unused(api, version)
-        print(f'Unused version {version}, exact main commit {commit}; no mutations performed.')
+        ensure_no_visible_conflict(api, version)
+        print(f'No visible conflict for {version}, exact main commit {commit}; no mutations performed. '
+              'Read-only access may hide drafts. The write job must recheck all drafts before creation.')
         return
     require(args.directory is not None, '--directory is required')
     if args.command == 'create':

@@ -6,6 +6,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 from pathlib import Path
 import tempfile
 import unittest
@@ -27,6 +28,8 @@ class FakeAPI:
         self.writes = []
         self.blobs = {}
         self.publish_after_create = False
+        self.hide_drafts = False
+        self.downloads = []
 
     def request(self, path, **kwargs):
         data, upload = kwargs.get('data'), kwargs.get('upload')
@@ -47,10 +50,11 @@ class FakeAPI:
                                              'size': upload.stat().st_size, 'state': 'uploaded'})
             return {}
         if path.startswith('releases?'):
-            return copy.deepcopy(self.releases)
+            return copy.deepcopy([r for r in self.releases if not (self.hide_drafts and r['draft'])])
         if path.startswith('git/ref/'):
             return self.tag
         if path.startswith('releases/assets/'):
+            self.downloads.append(int(path.rsplit('/', 1)[1]))
             return self.blobs[int(path.rsplit('/', 1)[1])]
         if path == 'releases/1':
             return copy.deepcopy(self.releases[0])
@@ -105,8 +109,18 @@ class DraftReleaseTests(unittest.TestCase):
         prior = {'id': 99, 'tag_name': '1.0.1', 'draft': False,
                  'target_commitish': 'main', 'assets': [{'name': 'BrowserOpener-1.0.1.dmg'}]}
         self.api.releases = [copy.deepcopy(prior)]
-        release.ensure_unused(self.api, VERSION)
+        release.ensure_no_visible_conflict(self.api, VERSION)
         self.assertEqual(self.api.releases, [prior])
+        self.assertEqual(self.api.writes, [])
+
+    def test_read_only_preflight_may_hide_draft_but_writer_recheck_blocks(self):
+        self.api.releases = [{'id': 1, 'tag_name': VERSION, 'draft': True,
+                              'target_commitish': COMMIT, 'assets': []}]
+        self.api.hide_drafts = True
+        release.ensure_no_visible_conflict(self.api, VERSION)
+        self.api.hide_drafts = False
+        with self.assertRaisesRegex(ValueError, 'already has release'):
+            self.create()
         self.assertEqual(self.api.writes, [])
 
     def test_existing_public_draft_partial_and_other_commit_all_block(self):
@@ -161,6 +175,52 @@ class DraftReleaseTests(unittest.TestCase):
         self.api.releases[0]['assets'].pop()
         with self.assertRaisesRegex(ValueError, 'Incomplete'):
             release.download(self.api, 1, Path(self.temp.name) / 'missing', VERSION, COMMIT, INFO, RUN)
+
+    def download_release(self):
+        self.create()
+        destination = Path(self.temp.name) / 'transfer'
+        release.download(self.api, 1, destination, VERSION, COMMIT, INFO, RUN)
+        return destination
+
+    def test_transfer_uses_release_bytes_even_without_original_build_artifact(self):
+        self.create()
+        shutil.rmtree(self.directory)
+        destination = Path(self.temp.name) / 'release-only'
+        release.download(self.api, 1, destination, VERSION, COMMIT, INFO, RUN)
+        self.assertEqual(self.api.downloads, [1, 2, 3])
+        receipt = release.verify_download(destination, 1, VERSION, COMMIT, INFO, RUN)
+        self.assertEqual([a['id'] for a in receipt['assets']], self.api.downloads)
+
+    def test_initial_build_artifact_cannot_replace_release_transfer(self):
+        with self.assertRaisesRegex(ValueError, 'Missing or unexpected files'):
+            release.verify_download(self.directory, 1, VERSION, COMMIT, INFO, RUN)
+
+    def test_offline_transfer_verification_needs_no_token_or_api(self):
+        destination = self.download_release()
+        environment = dict(os.environ)
+        environment.pop('GH_TOKEN', None)
+        environment['RELEASE_ID'] = '1'
+        with patch.dict(os.environ, environment, clear=True), \
+                patch.object(release, 'context', return_value=(VERSION, COMMIT, INFO, RUN)), \
+                patch.object(release, 'GitHub', side_effect=AssertionError('No API access allowed')), \
+                patch('sys.argv', ['draft-release.py', 'verify-download', '--directory', str(destination)]):
+            release.main()
+
+    def test_wrong_release_run_or_file_hash_in_receipt_is_rejected(self):
+        destination = self.download_release()
+        receipt_path = destination / 'release-receipt.json'
+        original = json.loads(receipt_path.read_text())
+        for key, value, message in [('id', 2, 'ID mismatch'), ('run_url', RUN + '4', 'run mismatch')]:
+            with self.subTest(key=key):
+                receipt = copy.deepcopy(original)
+                receipt[key] = value
+                receipt_path.write_text(json.dumps(receipt))
+                with self.assertRaisesRegex(ValueError, message):
+                    release.verify_download(destination, 1, VERSION, COMMIT, INFO, RUN)
+        receipt_path.write_text(json.dumps(original))
+        (destination / 'BrowserOpener-1.0.2.dmg').write_bytes(b'replaced')
+        with self.assertRaisesRegex(ValueError, 'receipt hash mismatch'):
+            release.verify_download(destination, 1, VERSION, COMMIT, INFO, RUN)
 
     def test_dispatch_requires_main_and_exact_sha(self):
         environment = {'RELEASE_VERSION': VERSION, 'TARGET_COMMIT': COMMIT,

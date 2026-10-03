@@ -62,16 +62,19 @@ Actions artifact는 14일 후 만료되므로 Homebrew cask의 URL로 사용하�
 
 1. 병합된 최신 main의 전체 40자리 SHA를 확인합니다.
 2. Actions의 `Draft Release` → `Run workflow`에서 branch는 `main`, `version`은 `1.0.2`, `target_commit`은 확인한 SHA를 입력합니다. 실행 시 main이 바뀌어 SHA가 다르면 중단하므로 최신 SHA를 다시 확인합니다.
-3. `preflight`가 main 실행·정확한 SHA·plist 버전·기존 태그와 Release 충돌을 확인합니다. 태그 이름은 기존처럼 `1.0.2`이며 `v`를 붙이지 않습니다.
+3. 읽기 전용 `preflight`가 main 실행·정확한 SHA·plist 버전·기존 태그 및 조회 가능한 Release 충돌을 확인합니다. Draft가 목록에서 숨겨질 수 있으므로 이 단계만으로 Draft 충돌이 없다고 판단하지 않습니다. 태그 이름은 기존처럼 `1.0.2`이며 `v`를 붙이지 않습니다.
 4. 기존 `macOS artifacts` workflow를 재사용해 `make test`, `make dmg`, DMG 검증·artifact 업로드·새 macOS 러너 재다운로드 검증을 수행합니다.
-5. 이 검증들이 모두 성공해야 `draft` 작업이 읽기 전용 작업의 artifact를 받아 체크섬·출처를 다시 검사하고 `draft=true`, `prerelease=false`, `target_commitish=<전체 SHA>`인 Release를 만듭니다. `BrowserOpener-1.0.2.dmg`, `SHA256SUMS`, `build-info.json`만 첨부합니다.
-6. 마지막 읽기 전용 `verify-release` 작업이 **Release에 실제 첨부된 파일**을 다시 내려받아 SHA-256·출처와 DMG 내부의 버전·arm64·macOS 13.0 타깃·ad-hoc 서명을 검사합니다. 이 작업까지 성공해야 Draft 준비가 검증된 것입니다.
+5. 이 검증들이 모두 성공해야 쓰기 권한의 `draft` 작업이 빌드 artifact의 체크섬·출처를 검사하고 **Draft를 포함한 Release 충돌을 다시 검사**합니다. 충돌이 없을 때만 `draft=true`, `prerelease=false`, `target_commitish=<전체 SHA>`인 Release를 만들고 `BrowserOpener-1.0.2.dmg`, `SHA256SUMS`, `build-info.json`을 첨부합니다.
+6. 같은 `draft` 작업에서 **실제 Release asset API를 통해 첨부 파일을 새 디렉터리로 다시 다운로드**합니다. SHA-256·출처와 다운로드 시점의 Draft 상태를 확인한 뒤 Release ID·asset ID·파일 해시·커밋·Actions 실행을 `release-receipt.json`으로 기록합니다. 이 다운로드 파일과 기록만 별도의 `release-download-...` artifact에 14일간 보관합니다. 최초 빌드 artifact를 복사해 전달하지 않습니다.
+7. 읽기 전용 macOS `verify-release` 작업은 `draft`가 출력한 **artifact ID**로 이 전달용 artifact를 받습니다. Draft API나 쓰기 토큰 없이 출처 기록·Release ID·커밋·체크섬을 대조하고 DMG 내부의 버전·arm64·macOS 13.0 타깃·ad-hoc 서명을 검사합니다. 이 작업까지 성공해야 배포 경로가 검증된 것입니다. 이 단계는 다운로드 시점 이후의 Draft 상태를 API로 재조회하지 않습니다.
 
-기본 권한과 빌드·검증 권한은 `contents: read`입니다. 초안을 작성·첨부하는 `draft` 작업만 `contents: write`를 사용합니다. 기본 `GITHUB_TOKEN`을 사용하며 별도 인증서·비밀키는 필요 없습니다. 앱은 계속 ad-hoc 서명이고 공증되지 않습니다.
+기본 권한과 빌드·검증 권한은 `contents: read`입니다. 초안 작성·첨부·실제 Release 다운로드를 담당하는 **기존 `draft` 작업 한 곳만** `contents: write`를 사용합니다. 기본 `GITHUB_TOKEN`을 사용하며 별도 인증서·비밀키는 필요 없습니다. 앱은 계속 ad-hoc 서명이고 공증되지 않습니다.
+
+[GitHub 공식 List releases 문서](https://docs.github.com/en/rest/releases/releases#list-releases)는 “Only users with push access will receive listings for draft releases.”라고 명시합니다. 일반 조회 endpoint의 `Contents: read` 최소 권한만으로 비공개 Draft와 asset 접근까지 보장된다고 가정하지 않습니다. 따라서 Draft 목록·첨부 파일 접근은 쓰기 권한 job에 두고, 읽기 전용 macOS job은 전달받은 실제 Release 다운로드 파일만 검증합니다. 출처 기록은 이 workflow의 전달 경로를 확인하는 자료이며 독립적인 서명·공증은 아닙니다.
 
 ### 중복·실패 처리
 
-같은 버전의 실행을 직렬화하며 업로드 도중 취소하지 않습니다. 빌드 전과 초안 작성 직전에 모든 Release(인증된 draft 포함)와 태그를 확인합니다. **같은 커밋이라도 이미 해당 버전의 태그나 Release가 있으면 중단**하고 기존 draft 여부·대상·파일명을 보고합니다. 재빌드된 DMG는 바이트가 달라질 수 있으므로 기존 파일과 자동으로 섞거나 덮어쓰지 않습니다.
+같은 버전의 실행을 직렬화하며 업로드 도중 취소하지 않습니다. 빌드 전 읽기 전용 검사는 조회 가능한 Release·태그에 한정됩니다. 초안 작성 직전에는 쓰기 토큰으로 Draft까지 포함해 다시 검사합니다. **같은 커밋이라도 이미 해당 버전의 태그나 Release가 있으면 중단**하고 기존 draft 여부·대상·파일명을 보고합니다. 재빌드된 DMG는 바이트가 달라질 수 있으므로 기존 파일과 자동으로 섞거나 덮어쓰지 않습니다.
 
 API 오류나 부분 업로드 후에는 기존 초안을 남기고 실패합니다. 무조건 재실행하거나 기존 초안을 자동 삭제하지 말고 원인과 첨부된 파일을 확인해야 합니다. 같은 버전의 부분 초안 복구는 별도로 판단합니다. 이미 공개된 Release에는 쓰지 않습니다. workflow에는 Release 공개 전환, 태그 이동, asset 교체·삭제 경로가 없습니다.
 
@@ -82,6 +85,8 @@ API 오류나 부분 업로드 후에는 기존 초안을 남기고 실패합니
 이전 1.0.1 CI 빌드의 사용자 Mac 실행 확인은 새 1.0.2 산출물의 실기 검증으로 대신하지 않습니다. 새 DMG를 사용자 Mac에서 확인한 후 공개 여부를 결정합니다. macOS 13.0은 배포 타깃이며 해당 OS 실기 검증 완료를 뜻하지 않습니다.
 
 이번 workflow는 Draft에서 멈춥니다. Draft 다운로드는 인증이 필요한 비공개 검토용이며 **아직 공개 tap용 URL이 아닙니다**. 14일 보관되는 Actions artifact와 별개로 Release 첨부 파일은 Release에 남습니다. 향후 사용자가 정식 게시한 뒤 버전별 고정 Release asset URL과 SHA-256을 검증하고 별도 `homebrew-taps` PR을 준비합니다. Actions artifact URL은 cask에 사용하지 않습니다.
+
+PR CI에서 통과하는 빌드·테스트 및 모의 API 테스트와, 실제 Draft 작성·Release asset 다운로드 경로의 실증은 구분합니다. 후자는 main 병합 후 승인된 수동 Release 실행에서 확인해야 합니다. Cloud의 추가 다운로드 도메인 허용은 Cloud에서 직접 파일을 확인하기 위한 별도 설정이며 GitHub Actions 실행 조건이 아닙니다.
 
 ## Q&A
 
