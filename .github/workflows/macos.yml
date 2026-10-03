@@ -3,7 +3,7 @@ name: macOS artifacts
 on:
   workflow_dispatch:
   push:
-    branches: [main, 'ci/**']
+    branches: [main]
   pull_request:
     branches: [main]
 
@@ -23,14 +23,12 @@ defaults:
 
 jobs:
   build:
-    # Internal ci/** branches already run on push; other PRs (including forks) run here.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name != github.repository || !startsWith(github.head_ref, 'ci/')
     runs-on: macos-15
     timeout-minutes: 30
     outputs:
       artifact-name: ${{ steps.name.outputs.artifact-name }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - name: Check Apple Silicon and pinned Xcode
@@ -65,7 +63,7 @@ jobs:
           cat dist/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
       - name: Upload DMG and build evidence (14 days)
         id: upload
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: ${{ steps.name.outputs.artifact-name }}
           path: dist/
@@ -78,7 +76,7 @@ jobs:
         run: echo "[Download DMG and evidence (14 days)]($ARTIFACT_URL)" >> "$GITHUB_STEP_SUMMARY"
       - name: Preserve failure logs (14 days)
         if: failure()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
         with:
           name: failure-logs-${{ github.sha }}-${{ github.run_attempt }}
           path: ci-logs/
@@ -90,11 +88,11 @@ jobs:
     runs-on: macos-15
     timeout-minutes: 10
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
       - name: Download uploaded artifact on a fresh runner
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@37930b1c2abaa49bbe596cd826c3c89aef350131 # v7
         with:
           name: ${{ needs.build.outputs.artifact-name }}
           path: downloaded

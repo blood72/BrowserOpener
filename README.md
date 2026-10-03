@@ -38,7 +38,7 @@ make dmg
 4. DMG, `SHA256SUMS`, `build-info.json`, `Package.resolved`, 테스트·패키징·검증 로그를 artifact로 **14일** 보관.
 5. 별도의 새 macOS 러너에서 업로드한 artifact를 다시 다운로드하고 SHA-256, 소스 커밋, 앱 구성·서명을 재검사.
 
-`main` 및 `ci/**` 브랜치 push, `main` 대상 PR, 수동 `workflow_dispatch`를 지원합니다. 동일 저장소의 `ci/**` PR에서는 push 검증을 사용해 중복 빌드를 생략합니다. 그 외 PR과 fork PR은 PR 커밋을 검증합니다. 동일 이벤트·브랜치의 이전 실행은 취소합니다. 수동 실행 UI는 워크플로가 기본 브랜치에 병합된 뒤 사용할 수 있습니다.
+`main` 브랜치 push, `main` 대상 PR(포크 포함), 수동 `workflow_dispatch`를 지원합니다. 작업 브랜치에서는 PR 이벤트만 빌드해 push와 PR의 중복 실행을 피합니다. 동일 이벤트·브랜치의 이전 실행은 취소합니다. 수동 실행 UI는 워크플로가 기본 브랜치에 병합된 뒤 사용할 수 있습니다.
 
 워크플로 권한은 `contents: read`이며 인증서나 별도 토큰을 요구하지 않습니다. 앱은 **ad-hoc 서명**됩니다. Developer ID 서명이나 Apple 공증을 받은 배포본이 아니므로 다운로드한 앱의 Gatekeeper 허용 여부와 실제 사용자 Mac에서의 브라우저 선택·실행은 별도 확인이 필요합니다. CI는 기본 브라우저 설정을 바꾸지 않습니다. Intel 및 universal 빌드는 이번 파이프라인 범위에 포함하지 않습니다.
 

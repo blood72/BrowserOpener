@@ -1,6 +1,7 @@
 #!/bin/bash
 # Verify the actual disk image, including after an Actions artifact download.
 set -euo pipefail
+trap 'status=$?; echo "::error file=scripts/verify-dmg.sh,line=$LINENO::DMG verification failed ($status): $BASH_COMMAND"; exit "$status"' ERR
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DMG_PATH="${1:?Usage: verify-dmg.sh path/to/BrowserOpener-version.dmg}"
