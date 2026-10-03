@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # BrowserOpener DMG 생성 스크립트
-# 로컬 배포용 (코드 서명 없음)
+# 개인용 배포 (ad-hoc 서명; Developer ID 서명 및 공증 없음)
 
-set -e
+set -euo pipefail
 
 # 색상 정의
 RED='\033[0;31m'
@@ -23,7 +23,8 @@ DIST_DIR="${PROJECT_ROOT}/dist"
 DMG_TMP_DIR="${DIST_DIR}/dmg_tmp"
 
 # Info.plist에서 버전 추출
-VERSION=$(defaults read "${PROJECT_ROOT}/Info.plist" CFBundleShortVersionString 2>/dev/null || echo "1.0.0")
+VERSION=$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${PROJECT_ROOT}/Info.plist")
+[[ "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "Invalid app version: $VERSION" >&2; exit 1; }
 DMG_NAME="${APP_NAME}-${VERSION}.dmg"
 VOLUME_NAME="${APP_NAME} ${VERSION}"
 
@@ -36,7 +37,7 @@ echo ""
 # 1. 앱 빌드
 echo -e "${YELLOW}[1/5] Swift 패키지 빌드 중...${NC}"
 cd "$PROJECT_ROOT"
-swift build -c release
+swift build -c release --force-resolved-versions
 
 if [ $? -ne 0 ]; then
     echo -e "${RED}❌ 빌드 실패!${NC}"
@@ -68,6 +69,10 @@ if [ -f "${PROJECT_ROOT}/DesignAssets/AppIcon.icns" ]; then
     cp "${PROJECT_ROOT}/DesignAssets/AppIcon.icns" "${APP_BUNDLE}/Contents/Resources/"
     echo -e "  ✓ 앱 아이콘 포함됨"
 fi
+
+# 번들 리소스까지 봉인하는 인증서 없는 서명. Developer ID 및 공증이 아니다.
+codesign --force --sign - --timestamp=none "$APP_BUNDLE"
+codesign --verify --strict --verbose=2 "$APP_BUNDLE"
 
 echo -e "${GREEN}✓ 앱 번들 생성 완료${NC}"
 
@@ -110,12 +115,12 @@ echo ""
 echo -e "생성된 파일: ${BLUE}${DMG_PATH}${NC}"
 echo -e "파일 크기: $(du -h "$DMG_PATH" | cut -f1)"
 echo ""
-echo -e "${YELLOW}⚠️  참고: 이 DMG는 코드 서명되지 않았습니다.${NC}"
+echo -e "${YELLOW}⚠️  참고: 앱은 ad-hoc 서명되었으며 Developer ID 서명·Apple 공증은 없습니다.${NC}"
 echo -e "${YELLOW}   다른 Mac에서 실행 시 '확인되지 않은 개발자' 경고가 표시될 수 있습니다.${NC}"
 echo -e "${YELLOW}   이 경우 시스템 환경설정 > 개인 정보 보호 및 보안에서 '확인 없이 열기'를 클릭하세요.${NC}"
 echo ""
 
 # Finder에서 열기 (선택 옵션)
-if [[ "$1" == "--open" ]]; then
+if [[ "${1:-}" == "--open" ]]; then
     open "$DIST_DIR"
 fi
