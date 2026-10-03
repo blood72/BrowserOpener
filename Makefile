@@ -15,10 +15,10 @@ build:
 test:
 	@if [ -z "$$DEVELOPER_DIR" ]; then \
 		echo "DEVELOPER_DIR가 비어 있어 기본 경로를 사용합니다: $(DEFAULT_DEVELOPER_DIR)"; \
-		DEVELOPER_DIR=$(DEFAULT_DEVELOPER_DIR) swift test; \
+		DEVELOPER_DIR=$(DEFAULT_DEVELOPER_DIR) swift test --force-resolved-versions; \
 	else \
 		echo "기존 DEVELOPER_DIR 사용: $$DEVELOPER_DIR"; \
-		swift test; \
+		swift test --force-resolved-versions; \
 	fi
 
 dmg:
