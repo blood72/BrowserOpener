@@ -1,6 +1,11 @@
 name: macOS artifacts
 
 on:
+  workflow_call:
+    outputs:
+      artifact-name:
+        description: Verified DMG artifact from this run
+        value: ${{ jobs.build.outputs.artifact-name }}
   workflow_dispatch:
   push:
     branches: [main]
@@ -11,7 +16,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: macos-${{ github.event_name }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
+  group: macos-${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.head.repo.full_name || github.repository }}-${{ github.head_ref || github.ref_name }}
   cancel-in-progress: true
 
 env:
@@ -41,6 +46,7 @@ jobs:
       - name: Test
         run: |
           mkdir -p ci-logs
+          python3 -m unittest discover -s scripts/tests -v 2>&1 | tee ci-logs/release-safety.log
           make test 2>&1 | tee ci-logs/tests.log
           git diff --exit-code -- Package.resolved
       - name: Release build and DMG
