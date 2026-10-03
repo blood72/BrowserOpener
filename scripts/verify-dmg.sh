@@ -1,13 +1,14 @@
 #!/bin/bash
 # Verify the actual disk image, including after an Actions artifact download.
-set -euo pipefail
+set -Eeuo pipefail
 trap 'status=$?; echo "::error file=scripts/verify-dmg.sh,line=$LINENO::DMG verification failed ($status): $BASH_COMMAND"; exit "$status"' ERR
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DMG_PATH="${1:?Usage: verify-dmg.sh path/to/BrowserOpener-version.dmg}"
 MOUNT_POINT=$(mktemp -d "${TMPDIR:-/tmp}/browseropener-verify.XXXXXX")
+MOUNTED=false
 cleanup() {
-    if mount | grep -Fq " on $MOUNT_POINT ("; then
+    if "$MOUNTED"; then
         hdiutil detach "$MOUNT_POINT"
     fi
     rmdir "$MOUNT_POINT"
@@ -16,6 +17,7 @@ trap cleanup EXIT
 
 hdiutil verify "$DMG_PATH"
 hdiutil attach "$DMG_PATH" -readonly -nobrowse -noautoopen -mountpoint "$MOUNT_POINT"
+MOUNTED=true
 APP="$MOUNT_POINT/BrowserOpener.app"
 BIN="$APP/Contents/MacOS/BrowserOpener"
 test -x "$BIN"
